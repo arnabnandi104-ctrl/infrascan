@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>IR Scan Mapper</title>
+<style>
+:root{--bg:#0f1115;--fg:#e8eaed;--mut:#8b93a1;--card:#1a1d24;--acc:#ff8a3d;--ok:#3ddc84;--bad:#ff5c5c;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:light){:root:not([data-theme="dark"]){--bg:#f4f5f7;--fg:#16181d;--mut:#667085;--card:#fff;--acc:#d9560b}}
+:root[data-theme="light"]{--bg:#f4f5f7;--fg:#16181d;--mut:#667085;--card:#fff;--acc:#d9560b}
+:root[data-theme="dark"]{--bg:#0f1115;--fg:#e8eaed;--mut:#8b93a1;--card:#1a1d24;--acc:#ff8a3d}
+*{box-sizing:border-box}html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:640px;margin:auto;padding:10px}
+.hud{display:flex;gap:10px;align-items:center;background:var(--card);border-radius:12px;padding:10px 14px}
+#big{font:700 38px ui-monospace,Menlo,monospace;color:var(--acc);min-width:110px}
+#big.stale{opacity:.4}
+.sm{font-size:12px;color:var(--mut);line-height:1.5}
+.row{display:flex;gap:6px;margin:8px 0;flex-wrap:wrap}
+button,select,input[type=number]{font:inherit;color:var(--fg);background:var(--card);border:1px solid var(--mut);border-radius:8px;padding:9px 11px}
+button{flex:1;min-width:70px;cursor:pointer}button.on{background:var(--acc);color:#000;border-color:var(--acc)}
+.tabs button{border-radius:8px 8px 0 0}
+.pane{background:var(--card);border-radius:12px;padding:10px}
+.off{position:absolute;left:-9999px;top:0;width:100%;max-width:620px;visibility:hidden;pointer-events:none}
+#vw{position:relative;width:100%;aspect-ratio:16/9;background:#000;border-radius:8px;overflow:hidden;touch-action:none}
+#v,#ov{position:absolute;inset:0;width:100%;height:100%}#v{z-index:1;object-fit:fill}#ov{z-index:2}
+#dv{width:100%;max-width:360px;image-rendering:pixelated;background:#000;border-radius:6px;display:block;margin-top:8px}#raw{font:11px ui-monospace,monospace;color:var(--mut);margin-top:4px;word-break:break-word}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 12px;margin-top:10px}
+.grid label{display:flex;flex-direction:column;font-size:12px;color:var(--mut);gap:3px}
+.grid input[type=range]{width:100%}
+canvas#map{width:100%;display:block;border-radius:8px;background:#000}
+#leg{height:12px;border-radius:6px;margin-top:8px;background:linear-gradient(90deg,#000004,#57106e,#bc3754,#f98e09,#fcffa4)}
+textarea{width:100%;height:160px;background:var(--bg);color:var(--fg);border:1px solid var(--mut);border-radius:8px;font:11px ui-monospace,monospace}
+#msg{color:var(--bad);font-size:12px;min-height:16px;margin-top:4px}
+</style></head><body>
+<div class="hud"><div id="big">---</div>
+<div class="sm"><div id="st">Camera off</div><div id="ori">Orientation: –</div><div id="cnt">0 readings</div></div></div>
+<div class="row"><button id="bStart">1 · Enable camera + motion</button></div>
+<div class="row"><button id="bCenter">2 · Set centre</button><button id="bScan">3 · Scan: OFF</button><button id="bClear">Clear</button></div>
+<div id="msg"></div>
+<div class="row tabs"><button data-t="setup" class="on">Setup</button><button data-t="mapP">Heatmap</button><button data-t="dataP">Data</button></div>
+
+<div id="setup" class="pane">
+ <div id="vw"><video id="v" playsinline muted></video><canvas id="ov"></canvas></div>
+ <div class="sm" style="margin-top:6px">1) Mount the phone, then drag a box around the <b>large temperature digits</b> including the decimal point. 2) With the display showing a reading, press <b>Calibrate layout</b>: it measures each digit slot, the gaps, the stroke thickness and the decimal point, then reads using that fixed layout. Moving the box clears the layout. If the display can show more digits later (e.g. 100+), calibrate again then; slots accumulate.</div>
+ <div class="sm" style="margin-top:8px">What the reader sees: processed image (white = digit ink), white boxes = digit slots, green/red = lit/off segments, blue = decimal point:</div><canvas id="dv"></canvas><div id="raw">–</div>
+ <div class="row"><button id="bCal">Calibrate layout</button><button id="bRst">Reset layout</button></div><div class="sm" id="calinfo"></div>
+ <div class="grid">
+  <label>Decimals (if point not seen) <input type="range" id="dec" min="0" max="2" step="1"><span id="decV"></span></label>
+  <label>Votes needed <input type="range" id="stab" min="1" max="6" step="1"><span id="stabV"></span></label>
+  <label>Log interval (ms) <input type="range" id="interval" min="100" max="1500" step="50"><span id="intervalV"></span></label>
+  <label>Cell size (°) <input type="range" id="cell" min="1" max="5" step="0.5"><span id="cellV"></span></label>
+  <label>Pointing direction
+   <select id="axis"><option value="+y">Top of phone</option><option value="-y">Bottom of phone</option><option value="+x">Right of phone</option><option value="-x">Left of phone</option><option value="-z">Out of back camera</option></select></label>
+  <label><span><input type="checkbox" id="spread"> Spread over 4.8° beam</span></label>
+  <label><span><input type="checkbox" id="smooth"> Smooth map</span></label>
+  <label>Digit colour <select id="pol"><option value="auto">Auto (decided at calibration)</option><option value="dark">Dark on light</option><option value="light">Light on dark</option></select></label>
+  <label>Rotate view <select id="rot"><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select></label>
+ </div>
+ <div class="row"><button id="bTorch">Torch</button><input type="number" id="man" placeholder="Manual °C" step="0.1" style="flex:1;min-width:0"><button id="bMan">Add manual</button></div>
+</div>
+
+<div id="mapP" class="pane off"><canvas id="map"></canvas><div id="leg"></div>
+ <div class="row sm" style="justify-content:space-between"><span id="lo"></span><span id="axl"></span><span id="hi"></span></div></div>
+
+<div id="dataP" class="pane off"><div class="row"><button id="bCopy">Copy CSV</button><button id="bShare">Share</button></div>
+ <textarea id="csv" readonly></textarea></div>
+
+<script>
+const $=id=>document.getElementById(id);
+const S={dec:1,stab:3,interval:300,cell:2,axis:'+y',spread:true,smooth:true,rot:0,pol:'auto',layout:null,roi:{x:.2,y:.3,w:.6,h:.4}};
+try{Object.assign(S,JSON.parse(localStorage.getItem('irscan4')||'{}'))}catch(e){}
+const save=()=>{try{localStorage.setItem('irscan4',JSON.stringify(S))}catch(e){}};
+const BEAM=4.8; // full angle of 1:12 cone, degrees
+let log=[],G=new Map(),scanning=false,az0=null,t0=Date.now(),lastLog=0,hist=[],cur={v:null,t:0};
+const O={a:0,b:0,g:0,has:false};
+
+// ---------- settings UI ----------
+['dec','stab','interval','cell','axis','spread','smooth','rot','pol'].forEach(k=>{
+ const el=$(k),chk=el.type==='checkbox';
+ if(chk)el.checked=S[k];else el.value=S[k];
+ const upd=()=>{S[k]=chk?el.checked:(el.tagName==='SELECT'?el.value:+el.value);const o=$(k+'V');if(o)o.textContent=S[k];save();
+  if(k==='cell'||k==='spread')rebuild();if(k==='rot'||k==='pol')resetLayout()};
+ el.addEventListener('input',upd);const o=$(k+'V');if(o)o.textContent=S[k];});
+
+// ---------- tabs ----------
+document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
+ document.querySelectorAll('.tabs button').forEach(x=>x.classList.toggle('on',x===b));
+ ['setup','mapP','dataP'].forEach(id=>{const p=$(id);if(id==='setup')p.classList.toggle('off',b.dataset.t!==id);else p.classList.toggle('off',b.dataset.t!==id)});
+ if(b.dataset.t==='dataP')$('csv').value=toCSV();render();});
+
+// ---------- camera + motion ----------
+const v=$('v');let stream=null,track=null,torch=false;
+$('bStart').onclick=async()=>{
+ $('msg').textContent='';
+ try{if(window.DeviceOrientationEvent&&DeviceOrientationEvent.requestPermission){const r=await DeviceOrientationEvent.requestPermission();if(r!=='granted')$('msg').textContent='Motion permission denied.';}}catch(e){$('msg').textContent='Motion: '+e.message}
+ try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}},audio:false});
+  v.srcObject=stream;await v.play();track=stream.getVideoTracks()[0];
+  v.addEventListener('loadedmetadata',fit);fit();$('st').textContent='Camera on';$('bStart').textContent='Camera running ✓';
+ }catch(e){$('msg').textContent='Camera unavailable ('+e.name+'). If this page is embedded, open it directly over HTTPS. You can still add manual readings.'}};
+function fit(){if(v.videoWidth)$('vw').style.aspectRatio=v.videoWidth+'/'+v.videoHeight;}
+$('bTorch').onclick=async()=>{try{torch=!torch;await track.applyConstraints({advanced:[{torch}]})}catch(e){$('msg').textContent='Torch not supported'}};
+window.addEventListener('deviceorientation',e=>{if(e.alpha==null)return;O.a=e.alpha;O.b=e.beta;O.g=e.gamma;O.has=true});
+
+function pointing(){
+ const r=Math.PI/180,a=O.a*r,b=O.b*r,g=O.g*r,cA=Math.cos(a),sA=Math.sin(a),cB=Math.cos(b),sB=Math.sin(b),cG=Math.cos(g),sG=Math.sin(g);
+ const X=[cA*cG-sA*sB*sG,sA*cG+cA*sB*sG,-cB*sG],Y=[-sA*cB,cA*cB,sB],Z=[cA*sG+sA*sB*cG,sA*sG-cA*sB*cG,cB*cG];
+ const m={'+x':X,'-x':X.map(x=>-x),'+y':Y,'-y':Y.map(x=>-x),'-z':Z.map(x=>-x)}[S.axis];
+ const az=Math.atan2(m[0],m[1])/r,el=Math.asin(Math.max(-1,Math.min(1,m[2])))/r;
+ return{az,el};}
+function rel(){const p=pointing();if(az0==null)az0=p.az;let d=p.az-az0;d=((d+540)%360)-180;return{az:d,el:p.el};}
+$('bCenter').onclick=()=>{az0=pointing().az;rebuild();};
+$('bScan').onclick=()=>{scanning=!scanning;$('bScan').textContent='Scan: '+(scanning?'ON':'OFF');$('bScan').classList.toggle('on',scanning);if(scanning&&az0==null)az0=pointing().az;};
+$('bClear').onclick=()=>{if(log.length&&!confirm('Clear all readings?'))return;log=[];G.clear();t0=Date.now();updCnt();render();};
+
+// ---------- ROI drag ----------
+const ov=$('ov'),octx=ov.getContext('2d');let ds=null;
+ov.addEventListener('pointerdown',e=>{ds=pos(e);ov.setPointerCapture(e.pointerId)});
+ov.addEventListener('pointermove',e=>{if(!ds)return;const p=pos(e);S.roi={x:Math.min(ds.x,p.x),y:Math.min(ds.y,p.y),w:Math.max(.02,Math.abs(p.x-ds.x)),h:Math.max(.02,Math.abs(p.y-ds.y))}});
+ov.addEventListener('pointerup',()=>{ds=null;resetLayout()});
+function pos(e){const r=ov.getBoundingClientRect();return{x:Math.min(1,Math.max(0,(e.clientX-r.left)/r.width)),y:Math.min(1,Math.max(0,(e.clientY-r.top)/r.height))}}
+
+// ---------- robust seven-segment reader: fits a segment model to the image ----------
+const SEG=[[.15,.06,.85,.06],[.92,.1,.92,.46],[.92,.54,.92,.9],[.15,.94,.85,.94],[.08,.54,.08,.9],[.08,.1,.08,.46],[.15,.5,.85,.5]]; // a b c d e f g
+const SPT=SEG.map(g=>[.25,.5,.75].map(t=>[g[0]+(g[2]-g[0])*t,g[1]+(g[3]-g[1])*t]));
+const PAT={'1111110':'0','0110000':'1','1101101':'2','1111001':'3','0110011':'4','1011011':'5','1011111':'6','0011111':'6','1110000':'7','1110010':'7','1111111':'8','1111011':'9','0111011':'9','1110011':'9','0000001':'-','0000000':' '};
+const PL=Object.entries(PAT).map(([k,c])=>[[...k].map(Number),c]);
+function bbl(a,W,H,r){const t=new Float32Array(a.length),o=new Float32Array(a.length),k=2*r+1;
+ for(let y=0;y<H;y++){let s=0;const b=y*W;for(let x=-r;x<=r;x++)s+=a[b+Math.min(W-1,Math.max(0,x))];for(let x=0;x<W;x++){t[b+x]=s/k;s+=a[b+Math.min(W-1,x+r+1)]-a[b+Math.max(0,x-r)]}}
+ for(let x=0;x<W;x++){let s=0;for(let y=-r;y<=r;y++)s+=t[Math.min(H-1,Math.max(0,y))*W+x];for(let y=0;y<H;y++){o[y*W+x]=s/k;s+=t[Math.min(H-1,y+r+1)*W+x]-t[Math.max(0,y-r)*W+x]}}
+ return o}
+function satBuild(a,W,H,t){for(let y=0;y<H;y++){let r=0;for(let x=0;x<W;x++){r+=a[y*W+x];t[(y+1)*(W+1)+x+1]=t[y*(W+1)+x+1]+r}}}
+function satQ(m,x0,y0,x1,y1){const W=m.W,H=m.H,c=(v,M)=>Math.max(0,Math.min(M,Math.round(v)));x0=c(x0,W);x1=c(x1,W);y0=c(y0,H);y1=c(y1,H);const t=m.sat,w=W+1;return t[y1*w+x1]-t[y0*w+x1]-t[y1*w+x0]+t[y0*w+x0]}
+function makeInk(c,pol){const{d,W,H}=c,N=W*H,g=new Float32Array(N);
+ for(let i=0;i<N;i++)g[i]=d[i*4]*.3+d[i*4+1]*.59+d[i*4+2]*.11;
+ const R=Math.max(4,H*.3|0),gs=bbl(g,W,H,1),bg=bbl(bbl(g,W,H,R),W,H,R),df=new Float32Array(N),h=new Uint32Array(256);
+ for(let i=0;i<N;i++){const x=pol>0?bg[i]-gs[i]:gs[i]-bg[i];df[i]=x;h[Math.max(0,Math.min(255,x|0))]++}
+ let c2=0,p=255;for(let i=0;i<256;i++){c2+=h[i];if(c2>=N*.995){p=i;break}}
+ if(p<8)return null;p=Math.max(.5*p,12);
+ const ink=new Float32Array(N);for(let i=0;i<N;i++)ink[i]=Math.max(0,Math.min(1,df[i]/p));
+ const bi=bbl(bbl(ink,W,H,1),W,H,1),sat=new Float64Array((W+1)*(H+1));satBuild(bi,W,H,sat);return{ink:bi,W,H,n:1,sat}}
+function bil(m,x,y){if(x<0||y<0||x>=m.W-1||y>=m.H-1)return 0;const xi=x|0,yi=y|0,fx=x-xi,fy=y-yi,i=yi*m.W+xi,a=m.ink,W=m.W;
+ return(a[i]*(1-fx)+a[i+1]*fx)*(1-fy)+(a[i+W]*(1-fx)+a[i+W+1]*fx)*fy}
+// p=[cx,cy,s(height px),theta(rad),skew,a(width/height)]
+let TR=.12;
+function segGeom(a,tr){const yT=tr/2,yB=1-tr/2,xL=tr/2/a,xR=1-tr/2/a,ix=.6*tr/a,iy=.6*tr;
+ return[[xL+ix,yT,xR-ix,yT],[xR,yT+iy,xR,.5-iy*.5],[xR,.5+iy*.5,xR,yB-iy],[xL+ix,yB,xR-ix,yB],[xL,.5+iy*.5,xL,yB-iy],[xL,yT+iy,xL,.5-iy*.5],[xL+ix,.5,xR-ix,.5]]}
+const KAP=6;
+function fitEval(p,m,det){const[cx,cy,s,th,sk,a]=p,pr=a*1.3,n=m.n||S.digits,rowW=(n-1)*pr+a,c=Math.cos(th),sn=Math.sin(th);let tot=0;const digs=[],GG=segGeom(a,TR);
+ for(let k=0;k<n;k++){
+  const smp=(lx,ly)=>{const mx=k*pr+lx*a+sk*(.5-ly)-rowW/2,my=ly-.5;return bil(m,cx+s*(mx*c-my*sn),cy+s*(mx*sn+my*c))};
+  const v=GG.map(g=>{let t=0;for(const u of[.25,.5,.75])t+=smp(g[0]+(g[2]-g[0])*u,g[1]+(g[3]-g[1])*u);return t/3});
+  const pen=.8*(Math.max(0,(smp(.5,.28)+smp(.5,.72))/2-.4)+Math.max(0,(smp(.5,-.12)+smp(.5,1.12))/2-.4));
+  const band=(l0,l1)=>{const q=[[0,l0],[1,l0],[0,l1],[1,l1]].map(z=>{const mx=k*pr+z[0]*a+sk*(.5-z[1])-rowW/2,my=z[1]-.5;return[cx+s*(mx*c-my*sn),cy+s*(mx*sn+my*c)]});return Math.min(1,satQ(m,Math.min(...q.map(z=>z[0])),Math.min(...q.map(z=>z[1])),Math.max(...q.map(z=>z[0])),Math.max(...q.map(z=>z[1])))/(a*.12*s*s))};
+  const bq=0*(Math.max(0,band(-.15,-.03)-.12)+Math.max(0,band(1.03,1.15)-.12));
+  const cs=[[-.08,-.05],[1.08,-.05],[-.08,1.05],[1.08,1.05]].map(q=>{const mx=k*pr+q[0]*a+sk*(.5-q[1])-rowW/2,my=q[1]-.5;return[cx+s*(mx*c-my*sn),cy+s*(mx*sn+my*c)]});
+  const mass=satQ(m,Math.min(...cs.map(q=>q[0])),Math.min(...cs.map(q=>q[1])),Math.max(...cs.map(q=>q[0])),Math.max(...cs.map(q=>q[1])))/(s*s);
+  const sc={};for(const[P,ch]of PL){let q=0,ex=0;for(let i=0;i<7;i++){if(P[i]){q+=v[i]-.5;ex+=Math.min(1,v[i])}else q-=1.2*Math.max(0,v[i]-.5)}q-=KAP*Math.max(0,mass-.525*TR*ex-.25*TR);if(!(ch in sc)||q>sc[ch][0])sc[ch]=[q,P]}
+  let b=-99,b2=-99,bc=' ',bp=null;for(const ch in sc){const q=sc[ch][0];if(q>b){b2=b;b=q;bc=ch;bp=sc[ch][1]}else if(q>b2)b2=q}
+  tot+=b-pen-bq;if(det)digs.push({ch:bc,mg:b-b2,pat:bp});}
+ return{tot,digs}}
+function inB(q,m){return q[2]>=.2*m.H&&q[2]<=1.05*m.H&&q[5]>=.35&&q[5]<=.8&&Math.abs(q[3])<=.45&&Math.abs(q[4])<=.5&&q[0]>0&&q[0]<m.W&&q[1]>0&&q[1]<m.H}
+function climb(p,m,iters,inb){inb=inb||(q=>inB(q,m));let best=fitEval(p,m).tot,st=[p[2]*.05,p[2]*.05,p[2]*.05,.04,.04,.03];
+ for(let it=0;it<iters;it++){let imp=false;
+  for(let i=0;i<6;i++)for(const d of[1,-1]){const q=p.slice();q[i]+=d*st[i];if(!inb(q))continue;const sc=fitEval(q,m).tot;if(sc>best+1e-6){best=sc;p=q;imp=true}}
+  if(!imp){st=st.map(x=>x*.5);if(st[2]<.15)break}}
+ return{p,sc:best}}
+function cc(bin,W,H){const lab=new Int32Array(W*H),comps=[];let id=0;
+ for(let i=0;i<W*H;i++){if(!bin[i]||lab[i])continue;id++;const st=[i];lab[i]=id;let x0=W,y0=H,x1=0,y1=0,ar=0;
+  while(st.length){const j=st.pop(),x=j%W,y=(j/W)|0;ar++;if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y;
+   for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){const X=x+dx,Y=y+dy;if(X<0||Y<0||X>=W||Y>=H)continue;const q=Y*W+X;if(bin[q]&&!lab[q]){lab[q]=id;st.push(q)}}}
+  comps.push({x0,y0,x1:x1+1,y1:y1+1,ar})}
+ return comps}
+function mergeC(cs){let ch=true;
+ while(ch){ch=false;
+  outer:for(let i=0;i<cs.length;i++)for(let j=i+1;j<cs.length;j++){const a=cs[i],b=cs[j];
+   const ox=Math.min(a.x1,b.x1)-Math.max(a.x0,b.x0),gy=Math.max(a.y0,b.y0)-Math.min(a.y1,b.y1),mw=Math.min(a.x1-a.x0,b.x1-b.x0),mh=Math.min(a.y1-a.y0,b.y1-b.y0);
+   if(ox>=.5*mw&&gy<=Math.max(2,.1*mh)){cs[i]={x0:Math.min(a.x0,b.x0),y0:Math.min(a.y0,b.y0),x1:Math.max(a.x1,b.x1),y1:Math.max(a.y1,b.y1),ar:a.ar+b.ar};cs.splice(j,1);ch=true;break outer}}}
+ return cs}
+function localMap(m,g,pad){const W=m.W,H=m.H,ink=new Float32Array(W*H),x0=Math.max(0,Math.floor(g.x0-pad)),x1=Math.min(W,Math.ceil(g.x1+pad)),y0=Math.max(0,Math.floor(g.y0-pad)),y1=Math.min(H,Math.ceil(g.y1+pad));
+ for(let y=y0;y<y1;y++)for(let x=x0;x<x1;x++)ink[y*W+x]=m.ink[y*W+x];
+ const sat=new Float64Array((W+1)*(H+1));satBuild(ink,W,H,sat);return{ink,W,H,n:1,sat}}
+function quality(r){return r&&r.row.length?(r.conf>=.25?1:.3)*r.sc/r.row.length:0}
+function classify(m0,g){const m=localMap(m0,g,Math.max(2,.05*(g.y1-g.y0))),w=g.x1-g.x0,h=g.y1-g.y0,s0=h,cy=(g.y0+g.y1)/2,cx=(g.x0+g.x1)/2;let best=null;
+ const inb=q=>q[2]>=.85*s0&&q[2]<=1.15*s0&&q[5]>=.35&&q[5]<=.8&&Math.abs(q[3])<=.2&&Math.abs(q[4])<=.4&&q[0]>=g.x0-.15*s0&&q[0]<=g.x1+.15*s0&&q[1]>=g.y0&&q[1]<=g.y1;
+ const inits=[[cx,cy,s0,0,0,.55],[cx,cy,s0,0,.15,.55]];if(w<.5*h)inits.push([g.x1-.3*s0,cy,s0,0,0,.55]);
+ for(const p0 of inits){if(!inb(p0))continue;const f=climb(p0,m,14,inb);if(!best||f.sc>best.sc)best={p:f.p,sc:f.sc}}
+ if(!best)return null;const e=fitEval(best.p,m,true).digs[0];return{p:best.p,sc:best.sc,ch:e.ch,mg:e.mg,pat:e.pat}}
+function detect(m){const W=m.W,H=m.H,N=W*H,bin=new Uint8Array(N);for(let i=0;i<N;i++)bin[i]=m.ink[i]>.5?1:0;m.bin=bin;
+ let cs=cc(bin,W,H).filter(c=>c.ar>=Math.max(5,.0008*N)&&c.ar<.5*N&&!((c.x1-c.x0)>.85*W&&(c.y1-c.y0)>.85*H));
+ const isDot=c=>{const w=c.x1-c.x0,h=c.y1-c.y0;return h<=.2*H&&w/h>=.5&&w/h<=2&&c.ar>=.5*w*h},pre=cs.filter(isDot);cs=mergeC(cs.filter(c=>!isDot(c)));const gl=[];
+ for(const g of cs){const w=g.x1-g.x0,h=g.y1-g.y0;
+  if(w>.95*h&&h>.2*H){const n=Math.max(2,Math.round(w/(.62*h)));let prev=g.x0;
+   for(let i=1;i<=n;i++){let cut=g.x1;if(i<n){const ex=g.x0+i*w/n;let bx=Math.round(ex),bv=1e9;
+     for(let x=Math.round(ex-.25*w/n);x<=ex+.25*w/n;x++){let sm=0;for(let y=g.y0;y<g.y1;y++)sm+=bin[y*W+Math.min(W-1,Math.max(0,x))];if(sm<bv){bv=sm;bx=x}}cut=bx}
+    gl.push({x0:prev,x1:cut,y0:g.y0,y1:g.y1,ar:1});prev=cut}}
+  else gl.push(g)}
+ const dg=gl.filter(g=>{const w=g.x1-g.x0,h=g.y1-g.y0;return h>=.12*H&&w/h<=1.05&&w/h>=.1});
+ if(!dg.length)return null;
+ const ref=dg.reduce((a,b)=>(b.y1-b.y0)>(a.y1-a.y0)?b:a),Hr=ref.y1-ref.y0,bot=ref.y1;
+ const row=dg.filter(g=>Math.abs(g.y1-bot)<=.2*Hr&&(g.y1-g.y0)>=.3*Hr&&(g.y1-g.y0)<=1.15*Hr).sort((a,b)=>a.x0-b.x0);
+ const dots=pre.concat(gl).filter(g=>!row.includes(g)&&Math.abs(g.y1-bot)<=.2*Hr&&(g.y1-g.y0)<=.3*Hr&&(g.y1-g.y0)>=.04*Hr&&(g.x1-g.x0)<=.3*Hr);
+ const res=row.map(g=>Object.assign({g},classify(m,g)||{ch:'?',mg:0,sc:0,p:null,pat:null}));
+ let dp=-1;for(let i=0;i<row.length-1&&dp<0;i++)if(dots.some(d=>{const c=(d.x0+d.x1)/2;return c>row[i].x0+.5*(row[i].x1-row[i].x0)&&c<row[i+1].x1}))dp=i;
+ const str=res.map(h=>h.ch).join(''),dec=dp>=0?res.length-1-dp:S.dec;
+ return{row:res,str,dec,dp,dots,conf:Math.min(...res.map(h=>h.mg)),sc:res.reduce((t,h)=>t+h.sc,0),m}}
+
+function measureT(m,g){const W=m.W,b=m.bin,w=g.x1-g.x0,h=g.y1-g.y0,hv=[],hh=[];
+ for(let y=g.y0;y<g.y1;y++){let run=0;for(let x=g.x0;x<=g.x1;x++){if(x<g.x1&&b[y*W+x])run++;else{if(run>0&&run<=.45*w)hv.push(run);run=0}}}
+ for(let x=g.x0;x<g.x1;x++){let run=0;for(let y=g.y0;y<=g.y1;y++){if(y<g.y1&&b[y*W+x])run++;else{if(run>0&&run<=.45*h)hh.push(run);run=0}}}
+ const med=a=>a.length?a.sort((x,y)=>x-y)[a.length>>1]:null,t1=med(hv),t2=med(hh);return t1&&t2?(t1+t2)/2:(t1||t2)}
+const medA=a=>a.length?a.slice().sort((x,y)=>x-y)[a.length>>1]:null;
+function calUpdate(cal,r){cal.good++;
+ for(const h of r.row){if(!h.p)continue;const p=h.p.slice(),s=p[2],one=h.ch==='1';
+  if(one){const w=cal.slots.find(x=>x.w);const aR=w?w.p[5]:.55;p[5]=aR;p[0]=h.g.x1-s*(aR/2+.5*p[4])}
+  const sl=cal.slots.find(x=>Math.abs(x.p[0]-p[0])<.45*Math.max(s,x.p[2])&&s/x.p[2]>.75&&s/x.p[2]<1.33);
+  if(!sl)cal.slots.push({p,n:1,c:1,w:!one});
+  else if(one&&sl.w)sl.n++;
+  else{const k=sl.w?sl.c:0;for(let i=0;i<6;i++)sl.p[i]=(sl.p[i]*k+p[i])/(k+1);sl.c=k+1;sl.n++;if(!one)sl.w=true}
+  const t=measureT(r.m,h.g);if(t)cal.ts.push(t/(h.g.y1-h.g.y0))}
+ for(const d of r.dots)cal.dots.push((d.x0+d.x1)/2)}
+function calFinalize(cal,prev,W,H,rot,pol){
+ const sl=cal.slots.filter(x=>x.n>=3).sort((a,b)=>a.p[0]-b.p[0]);if(!sl.length)return null;
+ return{slots:sl.map(x=>({p:x.p,n:x.n,c:x.c,w:x.w})),tr:cal.ts.length>=5?medA(cal.ts):(prev&&prev.tr)||.12,dpx:cal.dots.length>=3?medA(cal.dots):(prev?prev.dpx:null),W,H,rot,pol}}
+function layoutInfo(L){const f=x=>x.toFixed(1),sl=L.slots,pitch=[],gap=[];
+ for(let i=0;i<sl.length-1;i++){const A=sl[i].p,B=sl[i+1].p;pitch.push(B[0]-A[0]);gap.push((B[0]-B[5]*B[2]/2)-(A[0]+A[5]*A[2]/2))}
+ const dp=dpIndex(L);
+ return sl.length+' digit slot(s) | heights '+sl.map(x=>f(x.p[2])).join(', ')+' px | widths '+sl.map(x=>f(x.p[5]*x.p[2])).join(', ')+' px | gaps '+(gap.length?gap.map(f).join(', '):'–')+' px | stroke '+f(L.tr*sl[0].p[2])+' px ('+Math.round(L.tr*100)+'% of height) | slant '+sl.map(x=>x.p[4].toFixed(2)).join(', ')+' | decimal point '+(dp>=0?'after digit '+(dp+1):'not seen (uses Decimals setting)')}
+function dpIndex(L){if(L.dpx==null)return -1;const sl=L.slots;for(let i=0;i<sl.length-1;i++)if(sl[i].p[0]<L.dpx&&L.dpx<sl[i+1].p[0])return i;return -1}
+function readLayout(m,L){TR=L.tr;const row=[];
+ for(const sl of L.slots){const p0=sl.p,s=p0[2],hw=s*(p0[5]/2+Math.abs(p0[4])/2);
+  const g={x0:p0[0]-hw,x1:p0[0]+hw,y0:p0[1]-s/2,y1:p0[1]+s/2},ml=localMap(m,g,Math.max(2,.06*s));
+  const inb=q=>Math.abs(q[0]-p0[0])<=.07*s&&Math.abs(q[1]-p0[1])<=.07*s&&Math.abs(q[2]/s-1)<=.05&&Math.abs(q[3]-p0[3])<=.04&&Math.abs(q[4]-p0[4])<=.08&&Math.abs(q[5]-p0[5])<=.04;
+  const f=climb(p0,ml,6,inb),e=fitEval(f.p,ml,true).digs[0];row.push({g,p:f.p,ch:e.ch,mg:e.mg,sc:f.sc,pat:e.pat})}
+ const dp=dpIndex(L),str=row.map(h=>h.ch).join(''),dots=[];
+ if(dp>=0){const q=L.slots[0].p;dots.push({x0:L.dpx-1.5,x1:L.dpx+1.5,y0:q[1]+q[2]/2-3,y1:q[1]+q[2]/2})}
+ return{row,str,dec:dp>=0?row.length-1-dp:S.dec,dp,dots,conf:Math.min(...row.map(h=>h.mg)),sc:row.reduce((t,h)=>t+h.sc,0),m}}
+
+const oc=document.createElement('canvas'),ox=oc.getContext('2d',{willReadFrequently:true}),tc=document.createElement('canvas'),tx=tc.getContext('2d',{willReadFrequently:true});tc.width=tc.height=6;
+function getCrop(rot,ang){const vw=v.videoWidth,vh_=v.videoHeight,r=S.roi,sx=r.x*vw,sy=r.y*vh_,sw=r.w*vw,sh=r.h*vh_;
+ if(sw<8||sh<8)return null;const q=rot%180?1:0,asp=q?sh/sw:sw/sh;
+ const W=Math.max(32,Math.round(Math.min(420,96*asp))),H=Math.min(220,Math.max(32,Math.round(W/asp)));
+ tx.drawImage(v,sx,sy,sw,sh,0,0,6,6);const t=tx.getImageData(0,0,6,6).data;let R=0,G=0,B=0;for(let i=0;i<t.length;i+=4){R+=t[i];G+=t[i+1];B+=t[i+2]}const n=t.length/4;
+ oc.width=W;oc.height=H;ox.setTransform(1,0,0,1,0,0);ox.fillStyle='rgb('+(R/n|0)+','+(G/n|0)+','+(B/n|0)+')';ox.fillRect(0,0,W,H);
+ ox.translate(W/2,H/2);ox.rotate((rot+ang)*Math.PI/180);ox.scale(q?H/sw:W/sw,q?W/sh:H/sh);ox.drawImage(v,sx,sy,sw,sh,-sw/2,-sh/2,sw,sh);ox.setTransform(1,0,0,1,0,0);
+ return{d:ox.getImageData(0,0,W,H).data,W,H}}
+function parse(s,d){if(!s||!/^ *-?\d+$/.test(s))return null;const x=parseInt(s,10)/Math.pow(10,d);return(x>-100&&x<2000)?x:null}
+function fmt(r){const s=r.str,d=r.dec;return d>0&&s.length>d?s.slice(0,-d)+'.'+s.slice(-d):s}
+
+// ---------- calibration + main loop ----------
+let cal=null,vh=[],dbgR=null;
+const okR=r=>r&&r.conf>=.25&&parse(r.str,r.dec)!=null;
+function analyzeOnce(){const cr=getCrop(+S.rot,0);if(!cr)return null;let best=null;
+ for(const pol of S.pol==='auto'?[1,-1]:[S.pol==='light'?-1:1]){const m=makeInk(cr,pol),r=m&&detect(m);if(r){r.pol=pol;r.dims={W:cr.W,H:cr.H};if(!best||quality(r)>quality(best))best=r}}
+ return best}
+function showInfo(){$('calinfo').textContent=S.layout?'Layout: '+layoutInfo(S.layout):'No layout yet. Fix the box on the digits, then press Calibrate while the thermometer shows a reading. (Until then the reader searches each frame, which is less reliable.)'}
+function resetLayout(){S.layout=null;cal=null;save();showInfo()}
+$('bRst').onclick=resetLayout;
+$('bCal').onclick=()=>{if(!stream){$('msg').textContent='Start the camera first.';return}$('msg').textContent='';
+ cal={fr:0,good:0,slots:S.layout?S.layout.slots.map(x=>({p:x.p.slice(),n:x.n,c:x.c,w:x.w})):[],dots:[],ts:[],pol:S.layout?S.layout.pol:null,dims:null}};
+setInterval(()=>{
+ try{
+  if(!(stream&&v.readyState>=2&&v.videoWidth)){drawOv(null);return}
+  let r=null;
+  if(cal){
+   if(cal.pol!=null){const cr=getCrop(+S.rot,0),m=cr&&makeInk(cr,cal.pol);r=m&&detect(m);if(r)r.dims={W:cr.W,H:cr.H}}else r=analyzeOnce();
+   if(okR(r)){if(cal.pol==null)cal.pol=r.pol;cal.dims=r.dims;calUpdate(cal,r)}
+   if(r)dbgR=r;cal.fr++;$('calinfo').textContent='Calibrating… '+cal.fr+'/40 (readable frames: '+cal.good+'). Keep the display steady.';
+   if(cal.fr>=40){const L=cal.good>=5&&cal.dims?calFinalize(cal,S.layout,cal.dims.W,cal.dims.H,+S.rot,cal.pol):null;
+    if(L){S.layout=L;save();showInfo()}else{$('calinfo').textContent='Calibration failed: no readable digits. Check the box, lighting, Rotate and Digit colour settings.'}cal=null}
+  }else if(S.layout){const L=S.layout,cr=getCrop(L.rot,0);
+   if(cr&&cr.W===L.W&&cr.H===L.H){const m=makeInk(cr,L.pol);r=m&&readLayout(m,L);if(r)dbgR=r}
+   else $('raw').textContent='Box or video size changed since calibration. Press Calibrate again.';
+  }else{r=analyzeOnce();if(r)dbgR=r}
+  const val=(!cal&&okR(r))?parse(r.str,r.dec):null;
+  if(dbgR)drawDV(dbgR);
+  drawOv(cal?'calibrating…':r?(fmt(r)+(val!=null?' ✓':' ?')):'no reading');
+  vh.push(val);if(vh.length>S.stab+2)vh.shift();
+  const cnt={};vh.forEach(x=>{if(x!=null)cnt[x]=(cnt[x]||0)+1});
+  let cand=null,cb=0;for(const k in cnt)if(cnt[k]>cb){cb=cnt[k];cand=+k}
+  if(cand!=null&&cb>=S.stab&&(vh[vh.length-1]===cand||vh[vh.length-2]===cand))cur={v:cand,t:Date.now()};
+  const fresh=Date.now()-cur.t<800&&cur.v!=null;
+  $('big').textContent=cur.v==null?'---':cur.v.toFixed(Math.max(S.dec,0));$('big').classList.toggle('stale',!fresh);
+  if(scanning&&fresh&&Date.now()-lastLog>=S.interval){addReading(cur.v);cur.t=0}
+ }catch(e){drawOv(null);$('raw').textContent='Reader error: '+e.message}
+},100);
+function drawOv(text){
+ const w=ov.clientWidth,h=ov.clientHeight;if(ov.width!==w||ov.height!==h){ov.width=w;ov.height=h}
+ octx.clearRect(0,0,w,h);const q=S.roi,x=q.x*w,y=q.y*h,bw=q.w*w,bh=q.h*h;
+ octx.strokeStyle='#ff8a3d';octx.lineWidth=3;octx.strokeRect(x,y,bw,bh);
+ if(text){octx.font='bold 14px monospace';const tw=octx.measureText(text).width+8,ly=y>24?y-22:y+bh+4;
+  octx.fillStyle='rgba(0,0,0,.75)';octx.fillRect(x,ly,tw,20);octx.fillStyle='#fff';octx.fillText(text,x+4,ly+15)}}
+const dv=$('dv'),dx=dv.getContext('2d');
+function drawDV(r){
+ const m=r.m;dv.width=m.W;dv.height=m.H;const im=dx.createImageData(m.W,m.H);
+ for(let i=0;i<m.ink.length;i++){const c=m.ink[i]*255;im.data[i*4]=im.data[i*4+1]=im.data[i*4+2]=c;im.data[i*4+3]=255}dx.putImageData(im,0,0);
+ for(const h of r.row){dx.lineWidth=1;dx.strokeStyle='#fff';dx.strokeRect(h.g.x0,h.g.y0,h.g.x1-h.g.x0,h.g.y1-h.g.y0);
+  if(!h.p)continue;const[cx,cy,s,th,sk,a]=h.p,cc=Math.cos(th),sn=Math.sin(th);
+  const P=(lx,ly)=>{const mx=lx*a+sk*(.5-ly)-a/2,my=ly-.5;return[cx+s*(mx*cc-my*sn),cy+s*(mx*sn+my*cc)]};
+  dx.lineWidth=Math.max(1.5,s*.03);segGeom(a,TR).forEach((g,i)=>{const p1=P(g[0],g[1]),p2=P(g[2],g[3]);dx.strokeStyle=h.pat[i]?'#3ddc84':'rgba(255,92,92,.45)';dx.beginPath();dx.moveTo(p1[0],p1[1]);dx.lineTo(p2[0],p2[1]);dx.stroke()})}
+ dx.fillStyle='#4fc3f7';for(const d of r.dots)dx.fillRect(d.x0,d.y0,d.x1-d.x0,d.y1-d.y0);
+ $('raw').textContent='read "'+fmt(r)+'" | confidence '+r.conf.toFixed(2)+' (need ≥0.25) | '+(S.layout&&!cal?'using calibrated layout':'searching each frame (not calibrated)');}
+showInfo();
+
+function addReading(val,manual){
+ if(!O.has){$('msg').textContent='No orientation sensor data yet.';return}
+ const p=rel();const e={t:Date.now()-t0,v:val,az:p.az,el:p.el};log.push(e);lastLog=Date.now();gridAdd(e);updCnt();}
+$('bMan').onclick=()=>{const x=parseFloat($('man').value);if(!isNaN(x)){if(az0==null)az0=pointing().az;addReading(x)}};
+function updCnt(){$('cnt').textContent=log.length+' readings'}
+
+// ---------- grid / heatmap ----------
+function gridAdd(e){
+ const c=S.cell,ci=e.az/c,cj=e.el/c,R=S.spread?Math.max(.75,BEAM/2/c):0;
+ if(!S.spread){const k=Math.floor(ci)+','+Math.floor(cj),g=G.get(k)||[0,0];g[0]+=e.v;g[1]+=1;G.set(k,g);return}
+ for(let i=Math.floor(ci-R);i<=Math.ceil(ci+R);i++)for(let j=Math.floor(cj-R);j<=Math.ceil(cj+R);j++){
+  const d=Math.hypot(i+.5-ci,j+.5-cj);if(d>R)continue;const w=1-.6*d/R,k=i+','+j,g=G.get(k)||[0,0];g[0]+=e.v*w;g[1]+=w;G.set(k,g);}}
+function rebuild(){G.clear();log.forEach(gridAdd);render()}
+const CM=[[0,0,4],[87,16,110],[188,55,84],[249,142,9],[252,255,164]];
+function cmap(t){t=Math.max(0,Math.min(1,t))*4;const i=Math.min(3,t|0),f=t-i,a=CM[i],b=CM[i+1];return a.map((x,k)=>x+(b[k]-x)*f)}
+const mc=document.createElement('canvas');
+function render(){
+ if($('mapP').classList.contains('off'))return;
+ const c=$('map'),dpr=window.devicePixelRatio||1,W=c.clientWidth||340;
+ if(!G.size){c.width=W*dpr;c.height=160*dpr;c.style.height='160px';const x=c.getContext('2d');x.fillStyle='#888';x.font=(14*dpr)+'px sans-serif';x.fillText('No data yet – start scanning',12*dpr,80*dpr);return}
+ let i0=1e9,i1=-1e9,j0=1e9,j1=-1e9,mn=1e9,mx=-1e9;const cells=[];
+ for(const[k,g]of G){const[i,j]=k.split(',').map(Number),a=g[0]/g[1];cells.push([i,j,a]);i0=Math.min(i0,i);i1=Math.max(i1,i);j0=Math.min(j0,j);j1=Math.max(j1,j);mn=Math.min(mn,a);mx=Math.max(mx,a)}
+ i0--;j0--;i1++;j1++;const wC=i1-i0+1,hC=j1-j0+1,sc=Math.min(W/wC,420/hC),cw=wC*sc,ch=Math.max(100,hC*sc),ox0=(W-cw)/2;
+ c.width=Math.round(W*dpr);c.height=Math.round(ch*dpr);c.style.height=ch+'px';
+ const x=c.getContext('2d');x.scale(dpr,dpr);x.fillStyle='#000';x.fillRect(0,0,W,ch);
+ mc.width=wC;mc.height=hC;const mx2=mc.getContext('2d'),im=mx2.createImageData(wC,hC),rng=(mx-mn)||1;
+ for(const[i,j,a]of cells){const col=cmap((a-mn)/rng),p=((j1-j)*wC+(i-i0))*4;im.data.set([col[0],col[1],col[2],255],p)}
+ mx2.putImageData(im,0,0);x.imageSmoothingEnabled=S.smooth;x.drawImage(mc,ox0,0,cw,hC*sc);
+ x.font='10px sans-serif';x.fillStyle='rgba(255,255,255,.75)';x.strokeStyle='rgba(255,255,255,.2)';x.lineWidth=1;
+ for(let a=Math.ceil(i0*S.cell/10)*10;a<=(i1+1)*S.cell;a+=10){const px=ox0+(a/S.cell-i0)*sc;x.beginPath();x.moveTo(px,0);x.lineTo(px,hC*sc);x.stroke();x.fillText(a+'°',px+2,hC*sc-3)}
+ for(let e=Math.ceil(j0*S.cell/10)*10;e<=(j1+1)*S.cell;e+=10){const py=(j1+1-e/S.cell)*sc;x.beginPath();x.moveTo(ox0,py);x.lineTo(ox0+cw,py);x.stroke();x.fillText(e+'°',ox0+2,py-2)}
+ if(O.has){const p=rel(),px=ox0+(p.az/S.cell-i0)*sc,py=(j1+1-p.el/S.cell)*sc;x.strokeStyle='#3ddc84';x.lineWidth=2;x.beginPath();x.arc(px,py,BEAM/2/S.cell*sc,0,7);x.moveTo(px-6,py);x.lineTo(px+6,py);x.moveTo(px,py-6);x.lineTo(px,py+6);x.stroke()}
+ $('lo').textContent=mn.toFixed(1);$('hi').textContent=mx.toFixed(1);$('axl').textContent='Az (→ right) / El (↑ up), degrees from centre';}
+setInterval(()=>{
+ if(O.has){const p=O.has?rel():{az:0,el:0};$('ori').textContent='Az '+p.az.toFixed(1)+'°  El '+p.el.toFixed(1)+'°'}else $('ori').textContent='Orientation: no sensor data';
+ render();},250);
+
+// ---------- export ----------
+function toCSV(){return'time_ms,temp,azimuth_deg,elevation_deg\n'+log.map(e=>[e.t,e.v,e.az.toFixed(2),e.el.toFixed(2)].join(',')).join('\n')}
+$('bCopy').onclick=async()=>{const t=toCSV();$('csv').value=t;try{await navigator.clipboard.writeText(t);$('bCopy').textContent='Copied ✓'}catch(e){$('csv').select();$('bCopy').textContent='Select & copy manually'}setTimeout(()=>$('bCopy').textContent='Copy CSV',1800)};
+$('bShare').onclick=async()=>{try{await navigator.share({title:'IR scan',text:toCSV()})}catch(e){$('csv').value=toCSV();$('csv').select()}};
+</script></body></html>
